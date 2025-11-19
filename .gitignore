@@ -15,3 +15,7 @@ test.ipynb
 logs
 models
 test-compose.yml
+
+# Cache files for prestige scoring
+institution_cache.json
+author_cache.json

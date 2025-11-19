@@ -141,6 +141,12 @@ if __name__ == '__main__':
         help="Language of TLDR",
         default="English",
     )
+    add_argument(
+        "--use_prestige_scoring",
+        type=bool,
+        help="Use institution and author prestige in scoring",
+        default=True,
+    )
     parser.add_argument('--debug', action='store_true', help='Debug mode')
     args = parser.parse_args()
     assert (
@@ -169,7 +175,7 @@ if __name__ == '__main__':
           exit(0)
     else:
         logger.info("Reranking papers...")
-        papers = rerank_paper(papers, corpus)
+        papers = rerank_paper(papers, corpus, use_prestige=args.use_prestige_scoring)
         if args.max_paper_num != -1:
             papers = papers[:args.max_paper_num]
         if args.use_llm_api:
@@ -183,4 +189,17 @@ if __name__ == '__main__':
     logger.info("Sending email...")
     send_email(args.sender, args.receiver, args.sender_password, args.smtp_server, args.smtp_port, html)
     logger.success("Email sent successfully! If you don't receive the email, please check the configuration and the junk box.")
+    
+    # Save caches for institution and author scores
+    if args.use_prestige_scoring:
+        try:
+            from institution_scorer import get_institution_scorer
+            from author_scorer import get_author_scorer
+            inst_scorer = get_institution_scorer()
+            auth_scorer = get_author_scorer()
+            inst_scorer.save_cache()
+            auth_scorer.save_cache()
+            logger.info("Prestige scoring caches saved successfully.")
+        except Exception as e:
+            logger.warning(f"Failed to save prestige scoring caches: {e}")
 

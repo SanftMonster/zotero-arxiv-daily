@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 from functools import cached_property
 from tempfile import TemporaryDirectory
 import arxiv
@@ -12,6 +12,8 @@ from loguru import logger
 import tiktoken
 from contextlib import ExitStack
 from urllib.error import HTTPError
+from institution_scorer import get_institution_scorer
+from author_scorer import get_author_scorer
 
 
 
@@ -19,6 +21,9 @@ class ArxivPaper:
     def __init__(self,paper:arxiv.Result):
         self._paper = paper
         self.score = None
+        self.relevance_score = None  # Score from similarity matching
+        self.institution_score = None  # Score from institution prestige
+        self.author_score = None  # Score from author prestige
     
     @property
     def title(self) -> str:
@@ -241,3 +246,131 @@ class ArxivPaper:
                 logger.debug(f"Failed to extract affiliations of {self.arxiv_id}: {e}")
                 return None
             return affiliations
+    
+    @cached_property
+    def institution_prestige_score(self) -> float:
+        """
+        Get the institution prestige score (0-100).
+        Uses the maximum score among all affiliations.
+        """
+        if self.affiliations:
+            scorer = get_institution_scorer()
+            return scorer.get_max_score(self.affiliations)
+        return 50.0  # Default score if no affiliations
+    
+    @cached_property
+    def author_prestige_score(self) -> float:
+        """
+        Get the author prestige score (0-100).
+        Uses the maximum score among key authors (first and last).
+        """
+        if self.authors:
+            author_names = [a.name for a in self.authors]
+            scorer = get_author_scorer()
+            return scorer.get_max_score(author_names)
+        return 50.0  # Default score if no authors
+    
+    @cached_property
+    def prestigious_institutions(self) -> List[str]:
+        """Get list of prestigious institutions (score >= 90)."""
+        if not self.affiliations:
+            return []
+        scorer = get_institution_scorer()
+        return scorer.get_prestigious_institutions(self.affiliations)
+    
+    @cached_property
+    def prestigious_authors(self) -> List[str]:
+        """Get list of prestigious authors (score >= 80)."""
+        if not self.authors:
+            return []
+        author_names = [a.name for a in self.authors]
+        scorer = get_author_scorer()
+        return scorer.get_prestigious_authors(author_names)
+    
+    @cached_property
+    def detailed_summary(self) -> str:
+        """Generate a detailed Chinese summary (max 600 characters) using LLM."""
+        introduction = ""
+        conclusion = ""
+        methodology = ""
+        
+        if self.tex is not None:
+            content = self.tex.get("all")
+            if content is None:
+                content = "\n".join(self.tex.values())
+            
+            # Remove citations, figures, and tables
+            content = re.sub(r'~?\\cite.?\{.*?\}', '', content)
+            content = re.sub(r'\\begin\{figure\}.*?\\end\{figure\}', '', content, flags=re.DOTALL)
+            content = re.sub(r'\\begin\{table\}.*?\\end\{table\}', '', content, flags=re.DOTALL)
+            
+            # Extract Introduction section
+            match = re.search(r'\\section\{Introduction\}.*?(\\section|\\end\{document\}|\\bibliography|\\appendix|$)', content, flags=re.DOTALL)
+            if match:
+                introduction = match.group(0)
+            
+            # Extract Conclusion section
+            match = re.search(r'\\section\{Conclusion\}.*?(\\section|\\end\{document\}|\\bibliography|\\appendix|$)', content, flags=re.DOTALL)
+            if match:
+                conclusion = match.group(0)
+            
+            # Extract Method/Methodology section (if exists)
+            match = re.search(r'\\section\{(Method|Methodology|Approach)\}.*?(\\section|\\end\{document\}|\\bibliography|\\appendix|$)', content, flags=re.DOTALL)
+            if match:
+                methodology = match.group(0)
+        
+        llm = get_llm()
+        
+        prompt = """请根据以下学术论文的标题、摘要、引言、方法和结论部分，用中文生成一份详细的论文总结。总结应该：
+
+1. 字数不超过600字
+2. 包含以下内容：
+   - 研究背景和动机
+   - 主要方法和创新点
+   - 实验结果和主要发现
+   - 研究意义和应用价值
+3. 语言流畅、专业，适合科研人员快速了解论文核心内容
+
+论文信息如下：
+
+标题：__TITLE__
+
+摘要：__ABSTRACT__
+
+引言：
+__INTRODUCTION__
+
+方法：
+__METHODOLOGY__
+
+结论：
+__CONCLUSION__
+
+请生成详细总结："""
+
+        prompt = prompt.replace('__TITLE__', self.title)
+        prompt = prompt.replace('__ABSTRACT__', self.summary)
+        prompt = prompt.replace('__INTRODUCTION__', introduction[:3000] if introduction else "未提供")
+        prompt = prompt.replace('__METHODOLOGY__', methodology[:2000] if methodology else "未提供")
+        prompt = prompt.replace('__CONCLUSION__', conclusion[:2000] if conclusion else "未提供")
+        
+        # Truncate prompt to avoid token limit
+        enc = tiktoken.encoding_for_model("gpt-4o")
+        prompt_tokens = enc.encode(prompt)
+        prompt_tokens = prompt_tokens[:6000]  # Allow more tokens for detailed summary
+        prompt = enc.decode(prompt_tokens)
+        
+        try:
+            detailed_summary = llm.generate(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "你是一位专业的学术论文分析助手，擅长用简洁、准确的中文总结学术论文的核心内容。你的总结应该帮助科研人员快速理解论文的价值和创新点。",
+                    },
+                    {"role": "user", "content": prompt},
+                ]
+            )
+            return detailed_summary
+        except Exception as e:
+            logger.error(f"Failed to generate detailed summary for {self.arxiv_id}: {e}")
+            return "由于技术原因，无法生成详细摘要。请查看原文摘要。"
