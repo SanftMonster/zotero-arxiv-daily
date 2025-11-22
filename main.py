@@ -15,6 +15,7 @@ from tempfile import mkstemp
 from paper import ArxivPaper
 from llm import set_global_llm
 import feedparser
+from datetime import datetime
 
 def get_zotero_corpus(id:str,key:str) -> list[dict]:
     zot = zotero.Zotero(id, 'user', key)
@@ -147,6 +148,12 @@ if __name__ == '__main__':
         help="Use institution and author prestige in scoring",
         default=True,
     )
+    add_argument(
+        "--keywords",
+        type=str,
+        help="Keywords for paper filtering, separated by comma",
+        default=None,
+    )
     parser.add_argument('--debug', action='store_true', help='Debug mode')
     args = parser.parse_args()
     assert (
@@ -160,13 +167,26 @@ if __name__ == '__main__':
         logger.remove()
         logger.add(sys.stdout, level="INFO")
 
-    logger.info("Retrieving Zotero corpus...")
-    corpus = get_zotero_corpus(args.zotero_id, args.zotero_key)
-    logger.info(f"Retrieved {len(corpus)} papers from Zotero.")
-    if args.zotero_ignore:
-        logger.info(f"Ignoring papers in:\n {args.zotero_ignore}...")
-        corpus = filter_corpus(corpus, args.zotero_ignore)
-        logger.info(f"Remaining {len(corpus)} papers after filtering.")
+    if args.keywords:
+        logger.info(f"Using keywords for filtering: {args.keywords}")
+        # Create a fake corpus with the keywords
+        corpus = [{
+            'data': {
+                'abstractNote': args.keywords,
+                'dateAdded': datetime.now().strftime('%Y-%m-%dT%H:%M:%SZ'),
+                'collections': [],
+                'paths': []
+            }
+        }]
+    else:
+        logger.info("Retrieving Zotero corpus...")
+        corpus = get_zotero_corpus(args.zotero_id, args.zotero_key)
+        logger.info(f"Retrieved {len(corpus)} papers from Zotero.")
+        if args.zotero_ignore:
+            logger.info(f"Ignoring papers in:\n {args.zotero_ignore}...")
+            corpus = filter_corpus(corpus, args.zotero_ignore)
+            logger.info(f"Remaining {len(corpus)} papers after filtering.")
+
     logger.info("Retrieving Arxiv papers...")
     papers = get_arxiv_paper(args.arxiv_query, args.debug)
     if len(papers) == 0:
