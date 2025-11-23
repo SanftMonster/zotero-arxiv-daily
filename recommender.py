@@ -9,7 +9,8 @@ def rerank_paper(
     candidate: list[ArxivPaper],
     corpus: list[dict],
     model: str = 'avsolatorio/GIST-small-Embedding-v0',
-    use_prestige: bool = True
+    use_prestige: bool = True,
+    max_paper_num: int = 100,
 ) -> list[ArxivPaper]:
     """
     Rerank papers based on relevance and prestige (institutions and authors).
@@ -25,6 +26,7 @@ def rerank_paper(
         corpus: Zotero corpus
         model: Sentence transformer model name
         use_prestige: Whether to use institution and author prestige
+        max_paper_num: Maximum number of papers to return, used for optimization
         
     Returns:
         Sorted list of papers
@@ -44,13 +46,24 @@ def rerank_paper(
     sim = encoder.similarity(candidate_feature, corpus_feature)  # [n_candidate, n_corpus]
     relevance_scores = (sim * time_decay_weight).sum(axis=1) * 10  # [n_candidate]
     
+    # Store relevance score for all papers
+    for idx, paper in enumerate(candidate):
+        paper.relevance_score = relevance_scores[idx].item()
+    
     # Calculate final scores with prestige boost
-    logger.info("Calculating prestige scores for papers...")
-    for idx, (rel_score, paper) in enumerate(tqdm(zip(relevance_scores, candidate), total=len(candidate), desc="Scoring papers")):
-        # Store relevance score
-        paper.relevance_score = rel_score.item()
+    if use_prestige:
+        # Optimization: Only calculate prestige for top candidates
+        # Sort by relevance first
+        candidate.sort(key=lambda x: x.relevance_score, reverse=True)
         
-        if use_prestige:
+        # Determine how many papers to process for prestige
+        # We process at least max_paper_num * 3 papers to ensure we don't miss high-prestige papers
+        process_limit = min(len(candidate), max(max_paper_num * 3, 50))
+        top_candidates = candidate[:process_limit]
+        rest_candidates = candidate[process_limit:]
+        
+        logger.info(f"Calculating prestige scores for top {len(top_candidates)} papers (Optimization)...")
+        for paper in tqdm(top_candidates, desc="Scoring papers"):
             # Get prestige scores (0-100)
             institution_score = paper.institution_prestige_score
             author_score = paper.author_prestige_score
@@ -60,14 +73,12 @@ def rerank_paper(
             paper.author_score = author_score
             
             # Calculate boost factors (0.5 ~ 1.5)
-            # score=50 (average) -> boost=1.0
-            # score=100 (excellent) -> boost=1.5
-            # score=0 (poor) -> boost=0.5
             institution_boost = 0.5 + (institution_score / 100.0)
             author_boost = 0.5 + (author_score / 100.0)
             
             # Apply multiplicative boost
             final_score = paper.relevance_score * institution_boost * author_boost
+            paper.score = final_score
             
             logger.debug(
                 f"{paper.arxiv_id}: relevance={paper.relevance_score:.2f}, "
@@ -75,13 +86,20 @@ def rerank_paper(
                 f"author={author_score:.1f} (boost={author_boost:.2f}), "
                 f"final={final_score:.2f}"
             )
-        else:
-            # No prestige boost
+            
+        # For the rest of the papers, assign default scores
+        for paper in rest_candidates:
+            paper.institution_score = 50.0
+            paper.author_score = 50.0
+            paper.score = paper.relevance_score # No boost
+            
+    else:
+        # No prestige boost
+        for paper in candidate:
             final_score = paper.relevance_score
             paper.institution_score = 50.0
             paper.author_score = 50.0
-        
-        paper.score = final_score
+            paper.score = final_score
     
     # Sort by final score
     candidate = sorted(candidate, key=lambda x: x.score, reverse=True)

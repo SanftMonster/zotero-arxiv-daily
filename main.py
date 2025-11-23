@@ -15,7 +15,7 @@ from tempfile import mkstemp
 from paper import ArxivPaper
 from llm import set_global_llm
 import feedparser
-from datetime import datetime
+from datetime import datetime, timedelta
 
 def get_zotero_corpus(id:str,key:str) -> list[dict]:
     zot = zotero.Zotero(id, 'user', key)
@@ -47,23 +47,10 @@ def filter_corpus(corpus:list[dict], pattern:str) -> list[dict]:
     return new_corpus
 
 
-def get_arxiv_paper(query:str, debug:bool=False) -> list[ArxivPaper]:
+def get_arxiv_paper(query:str, days:int=1, debug:bool=False) -> list[ArxivPaper]:
     client = arxiv.Client(num_retries=10,delay_seconds=10)
-    feed = feedparser.parse(f"https://rss.arxiv.org/atom/{query}")
-    if 'Feed error for query' in feed.feed.title:
-        raise Exception(f"Invalid ARXIV_QUERY: {query}.")
-    if not debug:
-        papers = []
-        all_paper_ids = [i.id.removeprefix("oai:arXiv.org:") for i in feed.entries if i.arxiv_announce_type == 'new']
-        bar = tqdm(total=len(all_paper_ids),desc="Retrieving Arxiv papers")
-        for i in range(0,len(all_paper_ids),50):
-            search = arxiv.Search(id_list=all_paper_ids[i:i+50])
-            batch = [ArxivPaper(p) for p in client.results(search)]
-            bar.update(len(batch))
-            papers.extend(batch)
-        bar.close()
-
-    else:
+    
+    if debug:
         logger.debug("Retrieve 5 arxiv papers regardless of the date.")
         search = arxiv.Search(query='cat:cs.AI', sort_by=arxiv.SortCriterion.SubmittedDate)
         papers = []
@@ -71,6 +58,48 @@ def get_arxiv_paper(query:str, debug:bool=False) -> list[ArxivPaper]:
             papers.append(ArxivPaper(i))
             if len(papers) == 5:
                 break
+        return papers
+
+    if days > 1:
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+        # Format: YYYYMMDDHHMM
+        date_query = f"submittedDate:[{start_date.strftime('%Y%m%d')}0000 TO {end_date.strftime('%Y%m%d')}2359]"
+        full_query = f"{query} AND {date_query}"
+        logger.info(f"Searching Arxiv with query: {full_query}")
+        
+        search = arxiv.Search(query=full_query, sort_by=arxiv.SortCriterion.SubmittedDate, sort_order=arxiv.SortOrder.Descending)
+        papers = []
+        MAX_RESULTS = 2000
+        results = client.results(search)
+        
+        bar = tqdm(desc="Retrieving Arxiv papers (API)")
+        try:
+            for result in results:
+                papers.append(ArxivPaper(result))
+                bar.update(1)
+                if len(papers) >= MAX_RESULTS:
+                    logger.warning(f"Hit max limit of {MAX_RESULTS} papers.")
+                    break
+        except Exception as e:
+             logger.error(f"Error searching arxiv: {e}")
+        bar.close()
+        return papers
+    
+    # Default RSS behavior (days <= 1)
+    feed = feedparser.parse(f"https://rss.arxiv.org/atom/{query}")
+    if 'Feed error for query' in feed.feed.title:
+        raise Exception(f"Invalid ARXIV_QUERY: {query}.")
+    
+    papers = []
+    all_paper_ids = [i.id.removeprefix("oai:arXiv.org:") for i in feed.entries if i.arxiv_announce_type == 'new']
+    bar = tqdm(total=len(all_paper_ids),desc="Retrieving Arxiv papers")
+    for i in range(0,len(all_paper_ids),50):
+        search = arxiv.Search(id_list=all_paper_ids[i:i+50])
+        batch = [ArxivPaper(p) for p in client.results(search)]
+        bar.update(len(batch))
+        papers.extend(batch)
+    bar.close()
 
     return papers
 
@@ -154,6 +183,12 @@ if __name__ == '__main__':
         help="Keywords for paper filtering, separated by comma",
         default=None,
     )
+    add_argument(
+        "--days",
+        type=int,
+        help="Number of days to search back",
+        default=1,
+    )
     parser.add_argument('--debug', action='store_true', help='Debug mode')
     args = parser.parse_args()
     assert (
@@ -188,14 +223,27 @@ if __name__ == '__main__':
             logger.info(f"Remaining {len(corpus)} papers after filtering.")
 
     logger.info("Retrieving Arxiv papers...")
-    papers = get_arxiv_paper(args.arxiv_query, args.debug)
+    papers = get_arxiv_paper(args.arxiv_query, args.days, args.debug)
+    
+    # Filter processed papers
+    cache_path = "processed_ids.txt"
+    processed_ids = set()
+    if os.path.exists(cache_path):
+        with open(cache_path, 'r') as f:
+            processed_ids = set(f.read().splitlines())
+            
+    original_count = len(papers)
+    papers = [p for p in papers if p.arxiv_id not in processed_ids]
+    if len(papers) < original_count:
+        logger.info(f"Filtered {original_count - len(papers)} already processed papers. Remaining: {len(papers)}")
+
     if len(papers) == 0:
         logger.info("No new papers found. Yesterday maybe a holiday and no one submit their work :). If this is not the case, please check the ARXIV_QUERY.")
         if not args.send_empty:
           exit(0)
     else:
         logger.info("Reranking papers...")
-        papers = rerank_paper(papers, corpus, use_prestige=args.use_prestige_scoring)
+        papers = rerank_paper(papers, corpus, use_prestige=args.use_prestige_scoring, max_paper_num=args.max_paper_num)
         if args.max_paper_num != -1:
             papers = papers[:args.max_paper_num]
         if args.use_llm_api:
@@ -209,6 +257,13 @@ if __name__ == '__main__':
     logger.info("Sending email...")
     send_email(args.sender, args.receiver, args.sender_password, args.smtp_server, args.smtp_port, html)
     logger.success("Email sent successfully! If you don't receive the email, please check the configuration and the junk box.")
+    
+    # Save processed papers to cache
+    if args.max_paper_num != -1:
+        # Only cache the ones we actually sent
+        with open(cache_path, 'a') as f:
+            for p in papers:
+                f.write(f"{p.arxiv_id}\n")
     
     # Save caches for institution and author scores
     if args.use_prestige_scoring:
