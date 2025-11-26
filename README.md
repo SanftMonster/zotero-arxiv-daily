@@ -66,6 +66,7 @@ Below are all the secrets you need to set. They are invisible to anyone includin
 | RECEIVER | ✅ | str | The e-mail address that receives the paper list. | abc@outlook.com |
 | MAX_PAPER_NUM | | int | The maximum number of the papers presented in the email. This value directly affects the execution time of this workflow, because it takes about 70s to generate TL;DR for one paper. `-1` means to present all the papers retrieved. | 50 |
 | SEND_EMPTY | | bool | Whether to send an empty email even if no new papers today. | False |
+| DAYS | | int | How many past days of arXiv submissions to search. `1` uses the RSS feed (yesterday's papers); values `>1` switch to the API and retrieve a rolling window. | 7 |
 | USE_LLM_API | | bool | Whether to use the LLM API in the cloud or to use local LLM. If set to `1`, the API is used. Else if set to `0`, the workflow will download and deploy an open-source LLM. Default to `0`. | 0 |
 | OPENAI_API_KEY | | str | API Key when using the API to access LLMs. You can get FREE API for using advanced open source LLMs in [SiliconFlow](https://cloud.siliconflow.cn/i/b3XhBRAm). | sk-xxx |
 | OPENAI_API_BASE | | str | API URL when using the API to access LLMs. If not filled in, the default is the OpenAI URL. | https://api.siliconflow.cn/v1 |
@@ -85,7 +86,8 @@ That's all! Now you can test the workflow by manually triggering it:
 ![test](./assets/test.png)
 
 > [!NOTE]
-> The Test-Workflow Action is the debug version of the main workflow (Send-emails-daily), which always retrieve 5 arxiv papers regardless of the date. While the main workflow will be automatically triggered everyday and retrieve new papers released yesterday. There is no new arxiv paper at weekends and holiday, in which case you may see "No new papers found" in the log of main workflow.
+> The Test-Workflow Action is the debug version of the main workflow (Send-emails-daily), which always retrieve 5 arxiv papers regardless of the date. While the main workflow will be automatically triggered everyday and retrieve new papers released yesterday. There is no new arxiv paper at weekends and holiday, in which case you may see "No new papers found" in the log of main workflow.  
+> When `DAYS > 1`, you can keep using the same `ARXIV_QUERY` format as the RSS feed (e.g. `cs.AI+cs.CV`); the workflow will automatically convert it to the arXiv API format. If you prefer a custom advanced query, provide the API-compatible string directly (e.g. `cat:cs.AI AND ti:"agent"`).
 
 Then check the log and the receiver email after it finishes.
 

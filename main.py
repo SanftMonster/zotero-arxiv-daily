@@ -47,6 +47,32 @@ def filter_corpus(corpus:list[dict], pattern:str) -> list[dict]:
     return new_corpus
 
 
+def normalize_arxiv_query(query:str) -> str:
+    """
+    Convert RSS-style category strings (e.g. cs.AI+cs.CL) to arXiv API
+    compatible queries (e.g. (cat:cs.AI OR cat:cs.CL)).
+    If the user already provides an advanced API query, return as-is.
+    """
+    if query is None:
+        raise ValueError("ARXIV_QUERY is required.")
+    trimmed = query.strip()
+    if trimmed == "":
+        raise ValueError("ARXIV_QUERY cannot be empty.")
+
+    upper_query = trimmed.upper()
+    advanced_tokens = [" OR ", " AND ", "ABS:", "TI:", "AU:", "CAT:", "ALL:", "SUBMITTEDDATE:", "LASTUPDATEDDATE:"]
+    if ":" in trimmed or any(token in upper_query for token in advanced_tokens):
+        return trimmed
+
+    categories = [part.strip() for part in trimmed.split("+") if part.strip()]
+    if not categories:
+        raise ValueError("ARXIV_QUERY must contain at least one category.")
+    if len(categories) == 1:
+        return f"cat:{categories[0]}"
+    normalized = " OR ".join(f"cat:{cat}" for cat in categories)
+    return f"({normalized})"
+
+
 def get_arxiv_paper(query:str, days:int=1, debug:bool=False) -> list[ArxivPaper]:
     client = arxiv.Client(num_retries=10,delay_seconds=10)
     
@@ -65,7 +91,8 @@ def get_arxiv_paper(query:str, days:int=1, debug:bool=False) -> list[ArxivPaper]
         start_date = end_date - timedelta(days=days)
         # Format: YYYYMMDDHHMM
         date_query = f"submittedDate:[{start_date.strftime('%Y%m%d')}0000 TO {end_date.strftime('%Y%m%d')}2359]"
-        full_query = f"{query} AND {date_query}"
+        normalized_query = normalize_arxiv_query(query)
+        full_query = f"{normalized_query} AND {date_query}"
         logger.info(f"Searching Arxiv with query: {full_query}")
         
         search = arxiv.Search(query=full_query, sort_by=arxiv.SortCriterion.SubmittedDate, sort_order=arxiv.SortOrder.Descending)
