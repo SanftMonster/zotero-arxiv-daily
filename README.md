@@ -71,6 +71,7 @@ Below are all the secrets you need to set. They are invisible to anyone includin
 | OPENAI_API_KEY | | str | API Key when using the API to access LLMs. You can get FREE API for using advanced open source LLMs in [SiliconFlow](https://cloud.siliconflow.cn/i/b3XhBRAm). | sk-xxx |
 | OPENAI_API_BASE | | str | API URL when using the API to access LLMs. If not filled in, the default is the OpenAI URL. | https://api.siliconflow.cn/v1 |
 | MODEL_NAME | | str | Model name when using the API to access LLMs. If not filled in, the default is gpt-4o. Qwen/Qwen2.5-7B-Instruct is recommended when using [SiliconFlow](https://cloud.siliconflow.cn/i/b3XhBRAm). | Qwen/Qwen2.5-7B-Instruct |
+| PRESTIGE_WEIGHT | | float | 机构/作者声望加成的权重，`0` 表示只按相关性排序，`1` 表示保留完整声望加成，默认 `0.5` 使相关性占比更高。 | 0.5 |
 
 There are also some public variables (Repository Variables) you can set, which are easy to edit.
 ![vars](./assets/repo_var.png)

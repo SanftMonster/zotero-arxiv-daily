@@ -11,6 +11,7 @@ def rerank_paper(
     model: str = 'avsolatorio/GIST-small-Embedding-v0',
     use_prestige: bool = True,
     max_paper_num: int = 100,
+    prestige_weight: float = 1.0,
 ) -> list[ArxivPaper]:
     """
     Rerank papers based on relevance and prestige (institutions and authors).
@@ -52,6 +53,7 @@ def rerank_paper(
     
     # Calculate final scores with prestige boost
     if use_prestige:
+        prestige_weight = max(0.0, min(1.0, prestige_weight))
         # Optimization: Only calculate prestige for top candidates
         # Sort by relevance first
         candidate.sort(key=lambda x: x.relevance_score, reverse=True)
@@ -76,8 +78,10 @@ def rerank_paper(
             institution_boost = 0.5 + (institution_score / 100.0)
             author_boost = 0.5 + (author_score / 100.0)
             
-            # Apply multiplicative boost
-            final_score = paper.relevance_score * institution_boost * author_boost
+            combined_boost = institution_boost * author_boost
+            weighted_boost = 1 + prestige_weight * (combined_boost - 1)
+            # Apply weighted boost to keep relevance dominant when prestige_weight < 1
+            final_score = paper.relevance_score * max(weighted_boost, 0.0)
             paper.score = final_score
             
             logger.debug(
@@ -91,7 +95,7 @@ def rerank_paper(
         for paper in rest_candidates:
             paper.institution_score = 50.0
             paper.author_score = 50.0
-            paper.score = paper.relevance_score # No boost
+            paper.score = paper.relevance_score  # No boost
             
     else:
         # No prestige boost

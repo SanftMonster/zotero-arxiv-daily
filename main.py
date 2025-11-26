@@ -205,6 +205,12 @@ if __name__ == '__main__':
         default=True,
     )
     add_argument(
+        "--prestige_weight",
+        type=float,
+        help="Weight of prestige boost (0.0-1.0, lower means more relevance influence)",
+        default=0.5,
+    )
+    add_argument(
         "--keywords",
         type=str,
         help="Keywords for paper filtering, separated by comma",
@@ -270,7 +276,13 @@ if __name__ == '__main__':
           exit(0)
     else:
         logger.info("Reranking papers...")
-        papers = rerank_paper(papers, corpus, use_prestige=args.use_prestige_scoring, max_paper_num=args.max_paper_num)
+        papers = rerank_paper(
+            papers,
+            corpus,
+            use_prestige=args.use_prestige_scoring,
+            max_paper_num=args.max_paper_num,
+            prestige_weight=args.prestige_weight,
+        )
         if args.max_paper_num != -1:
             papers = papers[:args.max_paper_num]
         if args.use_llm_api:
